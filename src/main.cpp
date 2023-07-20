@@ -59,18 +59,9 @@ void IRAM_ATTR handleInterrupt()
     if (sys.io_button_pressed == 0)
     {
         sys.io_button_pressed = 1;
-
         if (sys.phase > MODE_OTA_SYNC)
         {
             sys.display_page++;
-        }
-        else if (sys.phase == MODE_HOST_SCAN || sys.phase == MODE_OTA_SCAN)
-        {
-            sys.io_bt_enabled = 1; // Enable the Bluetooth if button pressed during host scan or lora scan
-        }
-        else if (sys.phase == MODE_START)
-        {
-            sys.forcereset = 1;
         }
         sys.io_button_released = millis();
     }
@@ -89,17 +80,12 @@ void setup()
     DBGF("%s version %s UID %s\n", PRODUCT_NAME, VERSION, generate_id().c_str());
 
     sys.phase = MODE_START;
-    sys.forcereset = 0;
-    sys.io_bt_enabled = CFG_AUTOSTART_BT;
-    sys.debug = 0;
 
     config_init();
     sys.lora_cycle = cfg.lora_nodes * cfg.slot_spacing;
-    sys.cycle_stats = sys.lora_cycle * 2;
 #ifdef IO_LED_PIN
     pinMode(IO_LED_PIN, OUTPUT);
 #endif
-    sys.io_led_blink = 0;
 #ifdef PIN_BUTTON
     pinMode(PIN_BUTTON, INPUT);
     attachInterrupt(digitalPinToInterrupt(PIN_BUTTON), handleInterrupt, RISING);
@@ -162,7 +148,7 @@ void setup()
     DBGLN("[main] RadioManager::addRadio ESPNOW");
     radioManager->addRadio(ESPNOW::getSingleton());
 #ifdef LORA_BAND
-    //ESPNOW::getSingleton()->setEnabled(false);
+    ESPNOW::getSingleton()->setEnabled(false);
 #endif
 #ifdef LORA_FAMILY_SX128X
     DBGLN("[main] RadioManager::addRadio LoRa_SX128X");
@@ -211,6 +197,9 @@ void loop()
     // Periodic GNSS tasks
     GNSSManager::getSingleton()->loop();
     statsManager->storeTimerAndRestart(STATS_KEY_GNSSMANAGER_LOOPTIME_US);
+    // Periodic MSP tasks
+    MSPManager::getSingleton()->loop();
+    statsManager->storeTimerAndRestart(STATS_KEY_MSPMANAGER_LOOPTIME_US);
 
 #ifdef IO_LED_PIN
     if (millis() - sys.last_tx_start > cfg.slot_spacing) {
@@ -228,14 +217,6 @@ void loop()
 
     if (sys.phase == MODE_START)
     {
-
-        if (sys.forcereset)
-        {
-            display_draw_clearconfig();
-            config_clear();
-            delay(3000);
-            ESP.restart();
-        }
         sys.phase = MODE_HOST_SCAN;
     }
 
@@ -279,7 +260,6 @@ void loop()
             {
                 delay(100);
                 curr.host = MSPManager::getSingleton()->getFCVariant();
-                curr.fcversion = MSPManager::getSingleton()->getFCVersion();
                 if (cfg.force_gs)
                 {
                     curr.host = HOST_GCS;
@@ -304,11 +284,11 @@ void loop()
             if (PeerManager::getSingleton()->count() >= cfg.lora_nodes || curr.host == HOST_GCS)
             {
                 // Too many nodes already, or connected to a ground station: go to silent mode
-                sys.lora_no_tx = 1;
+                sys.disable_tx = 1;
             }
             else
             {
-                sys.lora_no_tx = 0;
+                sys.disable_tx = 0;
                 pick_id();
             }
             sys.display_page = 0;
@@ -341,7 +321,7 @@ void loop()
     if (sys.phase == MODE_OTA_SYNC)
     {
 
-        if (PeerManager::getSingleton()->count(false) == 0 || sys.lora_no_tx)
+        if (PeerManager::getSingleton()->count(false) == 0 || sys.disable_tx)
         {
             // Alone or Silent mode, no need to sync
             sys.next_tx = millis() + sys.lora_cycle;
@@ -353,9 +333,6 @@ void loop()
         }
 
         sys.display_updated = sys.next_tx + sys.lora_cycle - 30;
-        sys.stats_updated = sys.next_tx + sys.lora_cycle - 15;
-        sys.pps = 0;
-        sys.ppsc = 0;
         sys.phase = MODE_OTA_RX;
     }
 
@@ -369,7 +346,7 @@ void loop()
             sys.next_tx += sys.lora_cycle;
         }
 
-        if (sys.lora_no_tx)
+        if (sys.disable_tx)
         {
             sprintf(sys.message, "%s", "SILENT MODE (NO TX)");
         }
@@ -392,15 +369,13 @@ void loop()
 #endif
             air_type0_t packet = RadioManager::getSingleton()->prepare_packet();
             statsManager->startTimer();
+            MSPManager::getSingleton()->scheduleNextAt(millis() + cfg.slot_spacing);
             //DBGLN("[main] begin transmit");
             RadioManager::getSingleton()->transmit(&packet, sys.ota_nonce);
             statsManager->storeTimerAndRestart(STATS_KEY_OTA_SENDTIME_US);
             //sys.last_tx_end = millis();
             // DBGLN("[main] end transmit");
         }
-
-        sys.ota_slot = 0;
-        sys.msp_next_cycle = sys.last_tx_end + cfg.msp_after_tx_delay;
         sys.phase = MODE_OTA_RX;
     }
 
@@ -426,47 +401,7 @@ void loop()
         statsManager->storeTimerAndRestart(STATS_KEY_DISPLAY_UPDATETIME_US);
         sys.display_updated = sys.now;
     }
-
-    // ---------------------- SERIAL / MSP
-
-    if (sys.now > sys.msp_next_cycle && sys.phase > MODE_OTA_SYNC && sys.ota_slot < cfg.lora_nodes)
-    {
-
-        if (sys.ota_slot == 0 && (curr.host == HOST_INAV || curr.host == HOST_ARDU || curr.host == HOST_BTFL))
-        {
-
-            if (sys.ota_nonce % 6 == 0)
-            {
-                curr.state = MSPManager::getSingleton()->getState();
-            }
-
-            if ((sys.ota_nonce + 1) % 6 == 0)
-            {
-                curr.fcanalog = MSPManager::getSingleton()->getAnalogValues();
-            }
-        }
-
-        statsManager->startTimer();
-        // ----------------Send MSP to FC
-        if (sys.ota_slot == 0)
-        {
-            for (int i = 0; i < cfg.lora_nodes; i++)
-            {
-                peer_t *peer = PeerManager::getSingleton()->getPeer(i);
-                // Only send if the peer has been seen and it's not us
-                if (peer->id > 0 && i + 1 != curr.id)
-                {
-                    if (!DEBUG) {
-                        MSPManager::getSingleton()->sendRadar(peer);
-                    }
-                }
-            }
-        }
-        statsManager->storeTimerAndRestart(STATS_KEY_MSP_SENDTIME_US);
-
-        sys.msp_next_cycle += cfg.slot_spacing;
-        sys.ota_slot++;
-    }
+   
     static uint32_t lastDriftCalculation = 0;
     // Drift correction
     if (curr.id > 1 && PeerManager::getSingleton()->count_active() > 0)
