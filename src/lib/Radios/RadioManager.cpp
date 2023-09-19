@@ -40,7 +40,7 @@ air_type0_t RadioManager::prepare_packet()
     switch (air_0.extra_type)
     {
     case 0:
-        air_0.extra_value = loc.groundCourse / 10;
+        air_0.extra_value = loc.groundCourse;  // location.groundCourse is in degrees so we don't need to convert before sending
         break;
 
     case 1:
@@ -116,7 +116,7 @@ ReceiveResult RadioManager::receive(const uint8_t *rawPacket, size_t packetSize,
         return RECEIVE_RESULT_BAD_FIELD;
     }
 
-    peer_t *peer = PeerManager::getSingleton()->getPeer(air_0.id - 1);
+    peer_t *peer = PeerManager::getSingleton()->getPeerMutable(air_0.id - 1);
 
     // Update previous GPS location for extrapolation
     peer->gps_pre.lat = peer->gps.lat;
@@ -166,13 +166,14 @@ ReceiveResult RadioManager::receive(const uint8_t *rawPacket, size_t packetSize,
     default:
         break;
     }
+    DBGF("Received packet from peer %s\n", peer_slotname[air_0.id]);
 
     if ((sys.air_last_received_id == curr.id) && (sys.phase > MODE_OTA_SYNC) && !sys.disable_tx)
     {
         // Pick another slot
+        DBGF("[RadioManager] Received packet with our own ID %s, moving to %s. Last TX was %u-%u\n", peer_slotname[air_0.id], peer_slotname[curr.id], sys.last_tx_start, sys.last_tx_end);
         sprintf(sys.message, "%s", "ID CONFLICT");
         pick_id();
-        DBGF("Received packet with our own ID %s, moving to %s. Last TX was %u-%u\n", peer_slotname[air_0.id], peer_slotname[curr.id], sys.last_tx_start, sys.last_tx_end);
         resync_tx_slot(cfg.lora_timing_delay);
     }
     peer->packetsReceived++;

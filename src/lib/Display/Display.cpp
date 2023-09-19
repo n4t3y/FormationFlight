@@ -81,7 +81,7 @@ void display_draw_status(system_t *sys)
 
         for (int i = 0; i < cfg.lora_nodes; i++)
         {
-            peer_t *peer = PeerManager::getSingleton()->getPeer(i);
+            const peer_t *peer = PeerManager::getSingleton()->getPeer(i);
             if (peer->id > 0 && peer->lost == 0)
             {
                 diff = sys->last_tx_end - peer->updated;
@@ -102,7 +102,7 @@ void display_draw_status(system_t *sys)
         {
 
             display.setTextAlignment(TEXT_ALIGN_LEFT);
-            peer_t *peer = PeerManager::getSingleton()->getPeer(i);
+            const peer_t *peer = PeerManager::getSingleton()->getPeer(i);
 
             if (pos[i] > -1)
             {
@@ -184,7 +184,7 @@ void display_draw_status(system_t *sys)
 
         int i = constrain(sys->display_page - 3, 0, cfg.lora_nodes - 1);
         bool iscurrent = (i + 1 == curr.id);
-        peer_t *peer = PeerManager::getSingleton()->getPeer(i);
+        const peer_t *peer = PeerManager::getSingleton()->getPeer(i);
 
         display.setFont(ArialMT_Plain_24);
         display.setTextAlignment(TEXT_ALIGN_LEFT);
@@ -269,7 +269,7 @@ void display_draw_status(system_t *sys)
             {
                 display.drawString(0, 24, "A " + String(loc.alt) + "m");
                 display.drawString(0, 34, "S " + String(loc.groundSpeed / 100) + "m/s");
-                display.drawString(0, 44, "C " + String(loc.groundCourse / 10) + "°");
+                display.drawString(0, 44, "C " + String(loc.groundCourse) + "°");
             }
             else
             {
@@ -331,26 +331,10 @@ void display_draw_startup()
     display.setFont(ArialMT_Plain_10);
     display.setTextAlignment(TEXT_ALIGN_RIGHT);
     display.setTextAlignment(TEXT_ALIGN_LEFT);
-    display.drawString(0, 9, String(cfg.target_name));
-    display.drawString(35, 9, String(cfg.lora_band) + "MHz");
-    display.drawString(0, 19, "MODE:");
-    display.drawString(35, 19, String(loramode_name[cfg.lora_mode]));
-    display.drawString(0, 29, "HOST:");
-    display.display();
+    display.drawString(0, 9, String(CFG_TARGET_NAME));
+#ifdef LORA_BAND
+    display.drawString(35, 9, String(LORA_BAND) + "MHz");
 #endif
-}
-
-void display_draw_clearconfig()
-{
-#ifdef HAS_OLED
-    display.clear();
-    display.setFont(ArialMT_Plain_10);
-    display.setTextAlignment(TEXT_ALIGN_RIGHT);
-    display.setTextAlignment(TEXT_ALIGN_LEFT);
-    display.drawString(0, 9, String(cfg.target_name));
-    display.drawString(35, 9, String(cfg.lora_band) + "MHz");
-    display.drawString(0, 19, "MODE:");
-    display.drawString(35, 19, String(loramode_name[cfg.lora_mode]));
     display.drawString(0, 29, "HOST:");
     display.display();
 #endif

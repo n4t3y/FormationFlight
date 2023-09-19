@@ -134,13 +134,18 @@ void setup()
     // Create GNSSManager
     DBGLN("[main] start GNSSManager");
     GNSSManager *gnssManager = GNSSManager::getSingleton();
+#ifndef GNSS_INJECT
     // Use MSP GNSS as our primary provider
     gnssManager->addProvider(new MSP_GNSS());
+#endif
     // Use Direct GNSS if MSP isn't available
 #ifdef GNSS_ENABLED
     gnssManager->addProvider(new Direct_GNSS());
 #endif
-
+#ifdef GNSS_INJECT
+    // Send GNSS updates to a listening FC over MSP (an F411 for example)
+    gnssManager->addListener(new MSP_GNSS());
+#endif
     // Create RadioManager
     DBGLN("[main] start RadioManager");
     RadioManager *radioManager = RadioManager::getSingleton();
@@ -262,6 +267,7 @@ void loop()
                 curr.host = MSPManager::getSingleton()->getFCVariant();
                 if (cfg.force_gs)
                 {
+                    DBGLN("[main] forcing GCS mode");
                     curr.host = HOST_GCS;
                 }
                 if (cfg.display_enable)
@@ -285,6 +291,7 @@ void loop()
             {
                 // Too many nodes already, or connected to a ground station: go to silent mode
                 sys.disable_tx = 1;
+                DBGLN("[main] disabling TX due to too many nodes or host=GCS");
             }
             else
             {
@@ -302,7 +309,7 @@ void loop()
             {
                 for (int i = 0; i < cfg.lora_nodes; i++)
                 {
-                    peer_t *peer = PeerManager::getSingleton()->getPeer(i);
+                    const peer_t *peer = PeerManager::getSingleton()->getPeer(i);
                     if (peer->id > 0)
                     {
                         display_draw_peername(peer->id);
@@ -407,7 +414,7 @@ void loop()
     if (curr.id > 1 && PeerManager::getSingleton()->count_active() > 0)
     {
         int prev = curr.id - 2;
-        peer_t *peer = PeerManager::getSingleton()->getPeer(prev);
+        const peer_t *peer = PeerManager::getSingleton()->getPeer(prev);
         if (peer->id > 0 && millis() - peer->updated < sys.lora_cycle && millis() - lastDriftCalculation > sys.lora_cycle)
         {
             if (sys.last_tx_end > peer->updated)
@@ -419,7 +426,7 @@ void loop()
                 {
                     sys.drift_correction = constrain(sys.drift, -LORA_DRIFT_CORRECTION, LORA_DRIFT_CORRECTION);
                     sys.next_tx -= sys.drift_correction;
-                    DBGF("[main] Adjusting timing by %d\n", sys.drift_correction);
+                    DBGF("[main] adjusting timing by %d\n", sys.drift_correction);
                     sprintf(sys.message, "%s", "TIMING ADJUST");
                 }
             }

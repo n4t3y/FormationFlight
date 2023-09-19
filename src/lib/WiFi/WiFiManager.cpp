@@ -17,6 +17,7 @@
 #include "../Power/PowerManager.h"
 #include "../Statistics/StatsManager.h"
 #include "../Cryptography/CryptoManager.h"
+#include "webcontent.h"
 
 WiFiManager::WiFiManager()
 {
@@ -31,25 +32,11 @@ WiFiManager::WiFiManager()
     ssid += chipIDString;
     WiFi.softAP(ssid.c_str(), "inavradar");
     server = new AsyncWebServer(80);
-    server->on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-        StaticJsonDocument<512> doc;
-        doc["target"] = CFG_TARGET_FULLNAME;
-        doc["version"] = VERSION;
-        doc["buildTime"] = BUILDTIME;
-        doc["cloudBuild"] = CLOUD_BUILD;
-        doc["heap"] = ESP.getFreeHeap();
-#ifdef LORA_BAND
-        doc["lora_band"] = LORA_BAND;
-#endif
-        doc["uptimeMilliseconds"] = millis();
-        doc["name"] = curr.name;
-        doc["longName"] = generate_id();
-        doc["host"] = host_name[MSPManager::getSingleton()->getFCVariant()];
-        doc["state"] = MSPManager::getSingleton()->getState();
-        AsyncResponseStream *response = request->beginResponseStream("application/json");
-        serializeJson(doc, *response);
-        request->send(response);
-    });
+    // Permit cross-origin requests
+    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
+    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Methods", "GET, POST, PUT");
+    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers", "Content-Type");
+    server->on("/system/status", HTTP_GET, handleSystemStatus);
     server->on("/system/shutdown", HTTP_POST, [](AsyncWebServerRequest *request) {
         request->send(200, "text/plain", "OK");
         ESP.deepSleep(UINT32_MAX);
@@ -62,6 +49,7 @@ WiFiManager::WiFiManager()
         ESP.restart();
 #endif
     });
+    server->on("/system/status", HTTP_GET, handleSystemStatus);
     server->on("/system/bootloader", HTTP_POST, [](AsyncWebServerRequest *request) {
         request->send(200, "text/plain", "OK");
 #ifdef PLATFORM_ESP8266
@@ -94,11 +82,15 @@ WiFiManager::WiFiManager()
     });
     // PeerManager
     server->on("/peermanager/status", HTTP_GET, [](AsyncWebServerRequest *request) {
-        StaticJsonDocument<1024> doc;
+        StaticJsonDocument<2048> doc;
         PeerManager::getSingleton()->statusJson(&doc);
         AsyncResponseStream *response = request->beginResponseStream("application/json");
         serializeJson(doc, *response);
         request->send(response);
+    });
+    server->on("/peermanager/spoof", HTTP_POST, [](AsyncWebServerRequest *request) {
+        PeerManager::getSingleton()->enableSpoofing(true);
+        request->send(200, "text/plain", "OK");
     });
     // MSPManager
     server->on("/mspmanager/status", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -107,10 +99,6 @@ WiFiManager::WiFiManager()
         AsyncResponseStream *response = request->beginResponseStream("application/json");
         serializeJson(doc, *response);
         request->send(response);
-    });
-    server->on("/mspmanager/spoof", HTTP_POST, [](AsyncWebServerRequest *request) {
-        MSPManager::getSingleton()->enableSpoofing(true);
-        request->send(200, "text/plain", "OK");
     });
     // GNSSManager
     server->on("/gnssmanager/status", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -129,6 +117,11 @@ WiFiManager::WiFiManager()
         double lon = request->getParam("lon", true)->value().toDouble();
         GNSSManager::getSingleton()->spoofedLocation.lat = lat;
         GNSSManager::getSingleton()->spoofedLocation.lon = lon;
+        GNSSManager::getSingleton()->spoofedLocation.fixType = GNSS_FIX_TYPE_3D;
+        GNSSManager::getSingleton()->spoofedLocation.alt = 42000; // cm
+        GNSSManager::getSingleton()->spoofedLocation.numSat = 42;
+        GNSSManager::getSingleton()->spoofedLocation.hdop = 0.69;
+        GNSSManager::getSingleton()->spoofLocationEnabled = true;
 
         request->send(200, "text/plain", "OK");
     });
@@ -158,6 +151,16 @@ WiFiManager::WiFiManager()
     });
     // OTA firmware updates
     server->on("/update", HTTP_POST, handleFileUploadResponse, handleFileUploadData);
+    // 404
+    server->onNotFound([](AsyncWebServerRequest *request) {
+        // Handle CORS Preflight
+        if (request->method() == HTTP_OPTIONS) {
+            request->send(200);
+        } else {
+            request->send(404, "text/plain", "Not found");
+        }
+    });
+    #include "staticfilehandler.inc"
     server->begin();
     // Setup OTA updates
     ArduinoOTA.begin();
@@ -205,7 +208,7 @@ void WiFiManager::setOTAActive()
 
 bool WiFiManager::getOTAComplete()
 {
-    return otaCompleteAt > 0 && millis() - otaCompleteAt > 500;
+    return otaCompleteAt > 0 && millis() - otaCompleteAt > 1500;
 }
 
 void WiFiManager::setOTAComplete()
@@ -213,25 +216,76 @@ void WiFiManager::setOTAComplete()
     otaCompleteAt = millis();
 }
 
+OTAResult* WiFiManager::getOTAResult()
+{
+    return &otaResult;
+}
+
+void handleSystemStatus(AsyncWebServerRequest *request)
+{
+    StaticJsonDocument<512> doc;
+    doc["target"] = CFG_TARGET_FULLNAME;
+#ifdef PLATFORM_ESP8266
+    doc["platform"] = "ESP8266";
+#elif defined(PLATFORM_ESP32)
+    doc["platform"] = "ESP32";
+#endif
+    doc["version"] = VERSION;
+    doc["gitHash"] = GITHASH;
+    doc["buildTime"] = BUILDTIME;
+    doc["cloudBuild"] = CLOUD_BUILD;
+    doc["heap"] = ESP.getFreeHeap();
+#ifdef LORA_BAND
+    doc["lora_band"] = LORA_BAND;
+#endif
+    doc["uptimeMilliseconds"] = millis();
+    doc["phase"] = sys.phase;
+    doc["name"] = curr.name;
+    doc["longName"] = generate_id();
+    doc["host"] = host_name[MSPManager::getSingleton()->getFCVariant()];
+    doc["state"] = MSPManager::getSingleton()->getState();
+    AsyncResponseStream *response = request->beginResponseStream("application/json");
+    serializeJson(doc, *response);
+    request->send(response);
+}
 
 void handleFileUploadResponse(AsyncWebServerRequest *request)
 {
+    OTAResult *r = WiFiManager::getSingleton()->getOTAResult();
+    if (r->statusCode == 0)
+    {
+        return;
+    }
+    else if (r->statusCode == 200)
+    {
         AsyncWebServerResponse *response = request->beginResponse(200, "text/plain", "Please wait while the device reboots...");
-        // We can send them back to the homepage once we have a homepage :)
-        /*response->addHeader("Refresh", "15");
+        response->addHeader("Refresh", "15");
         response->addHeader("Location", "/");
-        response->addHeader("Connection", "close");*/
+        response->addHeader("Connection", "close");
         request->send(response);
         request->client()->close();
+    }
+    else
+    {
+        request->send(r->statusCode, "text/plain", r->message);
+    }
 
 }
 
 void handleFileUploadData(AsyncWebServerRequest *request, const String &filename, size_t index, uint8_t *data, size_t len, bool final)
 {
-    if (!filename.endsWith(".bin") && !filename.endsWith(".elf")) {
-        request->send(400, "text/plain", "must upload .bin or .elf");
+    OTAResult *r = WiFiManager::getSingleton()->getOTAResult();
+#ifdef PLATFORM_ESP8266
+    if (!filename.endsWith(".bin") && !filename.endsWith(".bin.gz")) {
+        r->message = "must upload .bin or .bin.gz";
+#elif defined(PLATFORM_ESP32)
+    if (!filename.endsWith(".bin")) {
+        r->message = "must upload .bin";
+#endif
+        r->statusCode = 400;
+        return;
     }
-    if (!index)
+    if (!index && !Update.isRunning())
     {
         size_t updateLength = request->contentLength();
         DBGF("HTTP update started with filename %s and size %d bytes\n", filename.c_str(), updateLength);
@@ -242,22 +296,25 @@ void handleFileUploadData(AsyncWebServerRequest *request, const String &filename
         {
             Update.printError(Serial);
 #ifdef PLATFORM_ESP8266
-            request->send(500, "text/plain", Update.getErrorString());
+            r->message = Update.getErrorString();
 #elif defined(PLATFORM_ESP32)
-            request->send(500, "text/plain", Update.errorString());
+            r->message = Update.errorString();
 #endif
+            r->statusCode = 500;
             return;
         }
+        WiFiManager::getSingleton()->setOTAActive();
     }
 
     if (Update.write(data, len) != len)
     {
         Update.printError(Serial);
 #ifdef PLATFORM_ESP8266
-        request->send(500, "text/plain", Update.getErrorString());
+        r->message = Update.getErrorString();
 #elif defined(PLATFORM_ESP32)
-        request->send(500, "text/plain", Update.errorString());
+        r->message = Update.errorString();
 #endif
+        r->statusCode = 500;
         return;
     }
     else
@@ -280,6 +337,8 @@ void handleFileUploadData(AsyncWebServerRequest *request, const String &filename
         {
             DBGLN("Update complete");
             WiFiManager::getSingleton()->setOTAComplete();
+            r->statusCode = 200;
+            return;
         }
     }
 }
