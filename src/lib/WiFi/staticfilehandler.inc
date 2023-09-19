@@ -11,12 +11,6 @@
         request->send(response);
     });
 
-    server->on("/font-files/Inter-roman.var.woff2", HTTP_GET, [](AsyncWebServerRequest *request) {
-        AsyncWebServerResponse *response = request->beginResponse_P(200, "application/octet-stream", (uint8_t *)html_font_files_Inter_roman_var_woff2_gz, sizeof(html_font_files_Inter_roman_var_woff2_gz));
-        response->addHeader("Content-Encoding", "gzip");
-        request->send(response);
-    });
-
     server->on("/formationflight.css", HTTP_GET, [](AsyncWebServerRequest *request) {
         AsyncWebServerResponse *response = request->beginResponse_P(200, "text/css", (uint8_t *)html_formationflight_css_gz, sizeof(html_formationflight_css_gz));
         response->addHeader("Content-Encoding", "gzip");
@@ -29,8 +23,8 @@
         request->send(response);
     });
 
-    server->on("/images/logo.png", HTTP_GET, [](AsyncWebServerRequest *request) {
-        AsyncWebServerResponse *response = request->beginResponse_P(200, "image/png", (uint8_t *)html_images_logo_png_gz, sizeof(html_images_logo_png_gz));
+    server->on("/images/logo.svg", HTTP_GET, [](AsyncWebServerRequest *request) {
+        AsyncWebServerResponse *response = request->beginResponse_P(200, "image/svg+xml", (uint8_t *)html_images_logo_svg_gz, sizeof(html_images_logo_svg_gz));
         response->addHeader("Content-Encoding", "gzip");
         request->send(response);
     });
@@ -43,12 +37,6 @@
 
     server->on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
         AsyncWebServerResponse *response = request->beginResponse_P(200, "text/html", (uint8_t *)html_index_html_gz, sizeof(html_index_html_gz));
-        response->addHeader("Content-Encoding", "gzip");
-        request->send(response);
-    });
-
-    server->on("/inter.css", HTTP_GET, [](AsyncWebServerRequest *request) {
-        AsyncWebServerResponse *response = request->beginResponse_P(200, "text/css", (uint8_t *)html_inter_css_gz, sizeof(html_inter_css_gz));
         response->addHeader("Content-Encoding", "gzip");
         request->send(response);
     });
